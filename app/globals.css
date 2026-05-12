@@ -1,16 +1,17 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f6efe6;
-  --foreground: #211910;
-  --surface: #fffdf8;
-  --panel: #f2e6d8;
-  --panel-strong: #ead8c3;
-  --border: rgba(54, 35, 17, 0.12);
-  --ink: #211910;
-  --muted-ink: #715d4a;
-  --accent: #e47c40;
-  --accent-strong: #d86322;
+  --background: #ffffff;
+  --foreground: #0f172a;
+  --surface: #ffffff;
+  --surface-alt: #f8fafc;
+  --panel: #eef2f7;
+  --panel-strong: #e2e8f0;
+  --border: #e2e8f0;
+  --ink: #0f172a;
+  --muted-ink: #64748b;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
 }
 
 @theme inline {
@@ -25,9 +26,7 @@
 }
 
 html {
-  background:
-    linear-gradient(180deg, rgba(252, 244, 233, 0.94), rgba(246, 239, 230, 0.98)),
-    var(--background);
+  background: var(--background);
 }
 
 body {
@@ -48,8 +47,12 @@ select {
     transform 160ms ease;
 }
 
+a {
+  text-decoration: none;
+}
+
 ::selection {
-  background: rgba(228, 124, 64, 0.24);
+  background: rgba(37, 99, 235, 0.16);
 }
 
 input::-webkit-outer-spin-button,
