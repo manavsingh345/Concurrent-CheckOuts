@@ -27,17 +27,14 @@ type MutationResponse = {
   };
 };
 
-type InventoryRow = {
+type CreatedReservationRow = {
   id: string;
+  replayed: boolean;
 };
 
 type ReservationRecord = Prisma.ReservationGetPayload<{
   include: typeof reservationInclude;
 }>;
-
-function isExpired(expiresAt: Date) {
-  return expiresAt.getTime() <= Date.now();
-}
 
 function mapReservation(reservation: ReservationRecord): ReservationView {
   return {
@@ -69,36 +66,6 @@ function mapReservation(reservation: ReservationRecord): ReservationView {
   };
 }
 
-async function expireReservationInTransaction(
-  tx: Prisma.TransactionClient,
-  reservation: ReservationRecord,
-) {
-  if (reservation.status !== ReservationStatus.PENDING) {
-    return reservation;
-  }
-
-  await tx.inventory.update({
-    where: {
-      id: reservation.inventoryId,
-    },
-    data: {
-      reservedStock: {
-        decrement: reservation.quantity,
-      },
-    },
-  });
-
-  return tx.reservation.update({
-    where: {
-      id: reservation.id,
-    },
-    data: {
-      status: ReservationStatus.EXPIRED,
-    },
-    include: reservationInclude,
-  });
-}
-
 function normalizeIdempotencyKey(value: string | null) {
   if (!value) {
     return null;
@@ -117,11 +84,50 @@ function normalizeIdempotencyKey(value: string | null) {
   return parsed.data;
 }
 
+async function getReservationOrThrow(id: string) {
+  const reservation = await prisma.reservation.findUnique({
+    where: { id },
+    include: reservationInclude,
+  });
+
+  if (!reservation) {
+    throw new AppError(404, "Reservation not found.", "RESERVATION_NOT_FOUND");
+  }
+
+  return reservation;
+}
+
+async function expirePendingReservation(id: string) {
+  const expiredRows = await prisma.$queryRaw<{ id: string }[]>`
+    WITH expired AS (
+      UPDATE "Reservation"
+      SET status = 'EXPIRED',
+          "updatedAt" = NOW()
+      WHERE id = ${id}
+        AND status = 'PENDING'
+        AND "expiresAt" <= NOW()
+      RETURNING id, "inventoryId", quantity
+    ),
+    released AS (
+      UPDATE "Inventory"
+      SET "reservedStock" = "reservedStock" - expired.quantity,
+          "updatedAt" = NOW()
+      FROM expired
+      WHERE "Inventory".id = expired."inventoryId"
+      RETURNING "Inventory".id
+    )
+    SELECT id FROM expired;
+  `;
+
+  return expiredRows.length > 0;
+}
+
 export async function createReservation(
   input: CreateReservationInput,
   rawIdempotencyKey: string | null,
 ): Promise<MutationResponse> {
   const idempotencyKey = normalizeIdempotencyKey(rawIdempotencyKey);
+  const reservationId = crypto.randomUUID();
   const cacheKey = idempotencyKey
     ? buildIdempotencyCacheKey(idempotencyKey, input)
     : null;
@@ -140,141 +146,140 @@ export async function createReservation(
     }
   }
 
-  try {
-    const expiresAt = new Date(
-      Date.now() + env.reservationTtlMinutes * 60 * 1000,
-    );
+  const expiresAt = new Date(
+    Date.now() + env.reservationTtlMinutes * 60 * 1000,
+  );
 
-    const reservation = await prisma.$transaction(async (tx) => {
-      const updatedRows = await tx.$queryRaw<InventoryRow[]>`
+  let createdRows: CreatedReservationRow[];
+
+  if (idempotencyKey) {
+    createdRows = await prisma.$queryRaw<CreatedReservationRow[]>`
+      WITH existing AS (
+        SELECT id, TRUE AS replayed
+        FROM "Reservation"
+        WHERE "idempotencyKey" = ${idempotencyKey}
+      ),
+      updated AS (
+        UPDATE "Inventory"
+        SET "reservedStock" = "reservedStock" + ${input.quantity},
+            "updatedAt" = NOW()
+        WHERE id = ${input.inventoryId}
+          AND NOT EXISTS (SELECT 1 FROM existing)
+          AND ("totalStock" - "reservedStock") >= ${input.quantity}
+        RETURNING id
+      ),
+      inserted AS (
+        INSERT INTO "Reservation" (id, "inventoryId", quantity, status, "expiresAt", "idempotencyKey", "createdAt", "updatedAt")
+        SELECT ${reservationId}, ${input.inventoryId}, ${input.quantity}, 'PENDING', ${expiresAt}, ${idempotencyKey}, NOW(), NOW()
+        FROM updated
+        RETURNING id, FALSE AS replayed
+      )
+      SELECT id, replayed FROM inserted
+      UNION ALL
+      SELECT id, replayed FROM existing;
+    `;
+  } else {
+    createdRows = await prisma.$queryRaw<CreatedReservationRow[]>`
+      WITH updated AS (
         UPDATE "Inventory"
         SET "reservedStock" = "reservedStock" + ${input.quantity},
             "updatedAt" = NOW()
         WHERE id = ${input.inventoryId}
           AND ("totalStock" - "reservedStock") >= ${input.quantity}
-        RETURNING id;
-      `;
-
-      if (updatedRows.length === 0) {
-        throw new AppError(
-          409,
-          "Not enough stock is available for this reservation.",
-          "INSUFFICIENT_STOCK",
-        );
-      }
-
-      return tx.reservation.create({
-        data: {
-          inventoryId: input.inventoryId,
-          quantity: input.quantity,
-          expiresAt,
-          idempotencyKey,
-        },
-        include: reservationInclude,
-      });
-    });
-
-    const payload: MutationResponse = {
-      reservation: mapReservation(reservation),
-      meta: {
-        replayed: false,
-      },
-    };
-
-    if (cacheKey) {
-      await setCachedMutation(cacheKey, {
-        status: 201,
-        body: payload,
-      });
-    }
-
-    return payload;
-  } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002" &&
-      idempotencyKey
-    ) {
-      const existing = await prisma.reservation.findUnique({
-        where: {
-          idempotencyKey,
-        },
-        include: reservationInclude,
-      });
-
-      if (!existing) {
-        throw error;
-      }
-
-      const payload: MutationResponse = {
-        reservation: mapReservation(existing),
-        meta: {
-          replayed: true,
-        },
-      };
-
-      if (cacheKey) {
-        await setCachedMutation(cacheKey, {
-          status: 201,
-          body: payload,
-        });
-      }
-
-      return payload;
-    }
-
-    throw error;
+        RETURNING id
+      ),
+      inserted AS (
+        INSERT INTO "Reservation" (id, "inventoryId", quantity, status, "expiresAt", "createdAt", "updatedAt")
+        SELECT ${reservationId}, ${input.inventoryId}, ${input.quantity}, 'PENDING', ${expiresAt}, NOW(), NOW()
+        FROM updated
+        RETURNING id, FALSE AS replayed
+      )
+      SELECT id, replayed FROM inserted;
+    `;
   }
+
+  if (createdRows.length === 0) {
+    throw new AppError(
+      409,
+      "Not enough stock is available for this reservation.",
+      "INSUFFICIENT_STOCK",
+    );
+  }
+
+  const created = createdRows[0];
+
+  const reservation = await prisma.reservation.findUnique({
+    where: {
+      id: created.id,
+    },
+    include: reservationInclude,
+  });
+
+  if (!reservation) {
+    throw new AppError(
+      500,
+      "Reservation was created but could not be loaded.",
+      "RESERVATION_READ_FAILED",
+    );
+  }
+
+  const payload: MutationResponse = {
+    reservation: mapReservation(reservation),
+    meta: {
+      replayed: created.replayed,
+    },
+  };
+
+  if (cacheKey) {
+    await setCachedMutation(cacheKey, {
+      status: 201,
+      body: payload,
+    });
+  }
+
+  return payload;
 }
 
 export async function confirmReservation(id: string): Promise<MutationResponse> {
-  const reservation = await prisma.$transaction(async (tx) => {
-    const existing = await tx.reservation.findUnique({
-      where: { id },
-      include: reservationInclude,
-    });
+  const confirmedRows = await prisma.$queryRaw<{ id: string }[]>`
+    WITH confirmed AS (
+      UPDATE "Reservation"
+      SET status = 'CONFIRMED',
+          "updatedAt" = NOW()
+      WHERE id = ${id}
+        AND status = 'PENDING'
+        AND "expiresAt" > NOW()
+      RETURNING id, "inventoryId", quantity
+    ),
+    consumed AS (
+      UPDATE "Inventory"
+      SET "totalStock" = "totalStock" - confirmed.quantity,
+          "reservedStock" = "reservedStock" - confirmed.quantity,
+          "updatedAt" = NOW()
+      FROM confirmed
+      WHERE "Inventory".id = confirmed."inventoryId"
+      RETURNING "Inventory".id
+    )
+    SELECT id FROM confirmed;
+  `;
 
-    if (!existing) {
-      throw new AppError(404, "Reservation not found.", "RESERVATION_NOT_FOUND");
-    }
+  if (confirmedRows.length === 0) {
+    const wasExpired = await expirePendingReservation(id);
 
-    if (existing.status !== ReservationStatus.PENDING) {
-      throw new AppError(
-        409,
-        `Reservation is already ${existing.status.toLowerCase()}.`,
-        "INVALID_RESERVATION_STATE",
-      );
-    }
-
-    if (isExpired(existing.expiresAt)) {
-      await expireReservationInTransaction(tx, existing);
+    if (wasExpired) {
       throw new AppError(410, "Reservation has expired.", "RESERVATION_EXPIRED");
     }
 
-    await tx.inventory.update({
-      where: {
-        id: existing.inventoryId,
-      },
-      data: {
-        totalStock: {
-          decrement: existing.quantity,
-        },
-        reservedStock: {
-          decrement: existing.quantity,
-        },
-      },
-    });
+    const existing = await getReservationOrThrow(id);
 
-    return tx.reservation.update({
-      where: {
-        id: existing.id,
-      },
-      data: {
-        status: ReservationStatus.CONFIRMED,
-      },
-      include: reservationInclude,
-    });
-  });
+    throw new AppError(
+      409,
+      `Reservation is already ${existing.status.toLowerCase()}.`,
+      "INVALID_RESERVATION_STATE",
+    );
+  }
+
+  const reservation = await getReservationOrThrow(id);
 
   return {
     reservation: mapReservation(reservation),
@@ -285,50 +290,44 @@ export async function confirmReservation(id: string): Promise<MutationResponse> 
 }
 
 export async function releaseReservation(id: string): Promise<MutationResponse> {
-  const reservation = await prisma.$transaction(async (tx) => {
-    const existing = await tx.reservation.findUnique({
-      where: { id },
-      include: reservationInclude,
-    });
+  const cancelledRows = await prisma.$queryRaw<{ id: string }[]>`
+    WITH cancelled AS (
+      UPDATE "Reservation"
+      SET status = 'CANCELLED',
+          "updatedAt" = NOW()
+      WHERE id = ${id}
+        AND status = 'PENDING'
+        AND "expiresAt" > NOW()
+      RETURNING id, "inventoryId", quantity
+    ),
+    released AS (
+      UPDATE "Inventory"
+      SET "reservedStock" = "reservedStock" - cancelled.quantity,
+          "updatedAt" = NOW()
+      FROM cancelled
+      WHERE "Inventory".id = cancelled."inventoryId"
+      RETURNING "Inventory".id
+    )
+    SELECT id FROM cancelled;
+  `;
 
-    if (!existing) {
-      throw new AppError(404, "Reservation not found.", "RESERVATION_NOT_FOUND");
-    }
+  if (cancelledRows.length === 0) {
+    const wasExpired = await expirePendingReservation(id);
 
-    if (existing.status !== ReservationStatus.PENDING) {
-      throw new AppError(
-        409,
-        `Reservation is already ${existing.status.toLowerCase()}.`,
-        "INVALID_RESERVATION_STATE",
-      );
-    }
-
-    if (isExpired(existing.expiresAt)) {
-      await expireReservationInTransaction(tx, existing);
+    if (wasExpired) {
       throw new AppError(410, "Reservation has expired.", "RESERVATION_EXPIRED");
     }
 
-    await tx.inventory.update({
-      where: {
-        id: existing.inventoryId,
-      },
-      data: {
-        reservedStock: {
-          decrement: existing.quantity,
-        },
-      },
-    });
+    const existing = await getReservationOrThrow(id);
 
-    return tx.reservation.update({
-      where: {
-        id: existing.id,
-      },
-      data: {
-        status: ReservationStatus.CANCELLED,
-      },
-      include: reservationInclude,
-    });
-  });
+    throw new AppError(
+      409,
+      `Reservation is already ${existing.status.toLowerCase()}.`,
+      "INVALID_RESERVATION_STATE",
+    );
+  }
+
+  const reservation = await getReservationOrThrow(id);
 
   return {
     reservation: mapReservation(reservation),

@@ -32,6 +32,8 @@ export type ProductListItem = {
   }[];
 };
 
+export type ProductDetail = ProductListItem;
+
 export type WarehouseListItem = {
   id: string;
   name: string;
@@ -137,6 +139,50 @@ export async function listProducts(): Promise<ProductListItem[]> {
       inventories,
     };
   });
+}
+
+export async function getProductById(id: string): Promise<ProductDetail | null> {
+  const product = await prisma.product.findUnique({
+    where: { id },
+    include: {
+      inventories: {
+        include: {
+          warehouse: true,
+        },
+        orderBy: {
+          warehouse: {
+            name: "asc",
+          },
+        },
+      },
+    },
+  });
+
+  if (!product) {
+    return null;
+  }
+
+  const inventories = product.inventories.map((inventory) => ({
+    inventoryId: inventory.id,
+    warehouseId: inventory.warehouseId,
+    warehouseName: inventory.warehouse.name,
+    warehouseLocation: inventory.warehouse.location,
+    totalStock: inventory.totalStock,
+    reservedStock: inventory.reservedStock,
+    availableStock: inventory.totalStock - inventory.reservedStock,
+  }));
+
+  return {
+    id: product.id,
+    name: product.name,
+    description: product.description,
+    price: product.price,
+    totalAvailableStock: inventories.reduce(
+      (sum, inventory) => sum + inventory.availableStock,
+      0,
+    ),
+    inventories,
+  };
 }
 
 export async function listWarehouses(): Promise<WarehouseListItem[]> {

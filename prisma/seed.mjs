@@ -23,26 +23,33 @@ async function main() {
     }),
   ]);
 
-  const [headphones, keyboard, speaker] = await prisma.$transaction([
+  const [gummies, monitor, sleepKit, diffuser] = await prisma.$transaction([
     prisma.product.create({
       data: {
-        name: "Studio Headphones",
-        description: "Closed-back headphones for checkout race-condition demos.",
-        price: 149.99,
+        name: "Performance Gummies",
+        description: "Daily wellness gummies for energy, routine, and repeat orders.",
+        price: 899,
       },
     }),
     prisma.product.create({
       data: {
-        name: "Mechanical Keyboard",
-        description: "Compact keyboard with just enough stock to stress test reservations.",
-        price: 129.0,
+        name: "Smart Cycle Monitor",
+        description: "A connected health device with premium packaging and live warehouse fulfillment.",
+        price: 4299,
       },
     }),
     prisma.product.create({
       data: {
-        name: "Portable Speaker",
-        description: "Small speaker with stock split across warehouses.",
-        price: 89.5,
+        name: "Sleep Recovery Kit",
+        description: "A bundled rest-and-recovery starter kit designed for repeat care journeys.",
+        price: 2499,
+      },
+    }),
+    prisma.product.create({
+      data: {
+        name: "Wellness Diffuser",
+        description: "A home-care diffuser merchandised like a premium D2C accessory.",
+        price: 1899,
       },
     }),
   ]);
@@ -50,39 +57,51 @@ async function main() {
   await prisma.inventory.createMany({
     data: [
       {
-        productId: headphones.id,
+        productId: gummies.id,
         warehouseId: northHub.id,
-        totalStock: 5,
+        totalStock: 24,
         reservedStock: 0,
       },
       {
-        productId: headphones.id,
+        productId: gummies.id,
         warehouseId: southHub.id,
-        totalStock: 3,
+        totalStock: 18,
         reservedStock: 0,
       },
       {
-        productId: keyboard.id,
+        productId: monitor.id,
         warehouseId: northHub.id,
-        totalStock: 8,
+        totalStock: 9,
         reservedStock: 0,
       },
       {
-        productId: keyboard.id,
-        warehouseId: southHub.id,
-        totalStock: 4,
-        reservedStock: 0,
-      },
-      {
-        productId: speaker.id,
-        warehouseId: northHub.id,
-        totalStock: 10,
-        reservedStock: 0,
-      },
-      {
-        productId: speaker.id,
+        productId: monitor.id,
         warehouseId: southHub.id,
         totalStock: 6,
+        reservedStock: 0,
+      },
+      {
+        productId: sleepKit.id,
+        warehouseId: northHub.id,
+        totalStock: 14,
+        reservedStock: 0,
+      },
+      {
+        productId: sleepKit.id,
+        warehouseId: southHub.id,
+        totalStock: 11,
+        reservedStock: 0,
+      },
+      {
+        productId: diffuser.id,
+        warehouseId: northHub.id,
+        totalStock: 12,
+        reservedStock: 0,
+      },
+      {
+        productId: diffuser.id,
+        warehouseId: southHub.id,
+        totalStock: 8,
         reservedStock: 0,
       },
     ],
