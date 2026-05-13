@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { requireAppUser } from "@/lib/auth";
 import { jsonError } from "@/lib/http";
-import { confirmReservation } from "@/lib/reservations";
+import { createPaymentOrderForReservation } from "@/lib/payments";
 
 type Context = {
   params: Promise<{
@@ -14,9 +14,9 @@ export async function POST(_: Request, context: Context) {
   try {
     const user = await requireAppUser();
     const { id } = await context.params;
-    const reservation = await confirmReservation(id, user.id);
+    const order = await createPaymentOrderForReservation(id, user.id);
 
-    return Response.json(reservation);
+    return Response.json({ order });
   } catch (error) {
     return jsonError(error);
   }

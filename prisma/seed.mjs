@@ -23,7 +23,18 @@ async function main() {
     }),
   ]);
 
-  const [gummies, monitor, sleepKit, diffuser] = await prisma.$transaction([
+  const [
+    gummies,
+    monitor,
+    sleepKit,
+    diffuser,
+    hydration,
+    massager,
+    probiotic,
+    aromatherapy,
+    thermos,
+    posture,
+  ] = await prisma.$transaction([
     prisma.product.create({
       data: {
         name: "Performance Gummies",
@@ -50,6 +61,48 @@ async function main() {
         name: "Wellness Diffuser",
         description: "A home-care diffuser merchandised like a premium D2C accessory.",
         price: 1899,
+      },
+    }),
+    prisma.product.create({
+      data: {
+        name: "Hydration Support Tablets",
+        description: "Electrolyte tablets built for recovery, travel, and daily hydration routines.",
+        price: 699,
+      },
+    }),
+    prisma.product.create({
+      data: {
+        name: "Smart Pulse Massager",
+        description: "A compact recovery device designed for post-workout care and evening relaxation.",
+        price: 3299,
+      },
+    }),
+    prisma.product.create({
+      data: {
+        name: "Gut Balance Probiotic",
+        description: "A daily digestive support formula for routine wellness and long-term replenishment.",
+        price: 1199,
+      },
+    }),
+    prisma.product.create({
+      data: {
+        name: "Aromatherapy Sleep Mist",
+        description: "A bedside calming spray with a softer home-care presentation and quick reorder appeal.",
+        price: 999,
+      },
+    }),
+    prisma.product.create({
+      data: {
+        name: "Thermal Recovery Bottle",
+        description: "An insulated daily-use bottle merchandised as a premium wellness accessory.",
+        price: 1499,
+      },
+    }),
+    prisma.product.create({
+      data: {
+        name: "Posture Relief Wrap",
+        description: "A lightweight support wrap positioned as a comfort and recovery essential.",
+        price: 1599,
       },
     }),
   ]);
@@ -102,6 +155,78 @@ async function main() {
         productId: diffuser.id,
         warehouseId: southHub.id,
         totalStock: 8,
+        reservedStock: 0,
+      },
+      {
+        productId: hydration.id,
+        warehouseId: northHub.id,
+        totalStock: 28,
+        reservedStock: 0,
+      },
+      {
+        productId: hydration.id,
+        warehouseId: southHub.id,
+        totalStock: 21,
+        reservedStock: 0,
+      },
+      {
+        productId: massager.id,
+        warehouseId: northHub.id,
+        totalStock: 7,
+        reservedStock: 0,
+      },
+      {
+        productId: massager.id,
+        warehouseId: southHub.id,
+        totalStock: 5,
+        reservedStock: 0,
+      },
+      {
+        productId: probiotic.id,
+        warehouseId: northHub.id,
+        totalStock: 19,
+        reservedStock: 0,
+      },
+      {
+        productId: probiotic.id,
+        warehouseId: southHub.id,
+        totalStock: 16,
+        reservedStock: 0,
+      },
+      {
+        productId: aromatherapy.id,
+        warehouseId: northHub.id,
+        totalStock: 13,
+        reservedStock: 0,
+      },
+      {
+        productId: aromatherapy.id,
+        warehouseId: southHub.id,
+        totalStock: 10,
+        reservedStock: 0,
+      },
+      {
+        productId: thermos.id,
+        warehouseId: northHub.id,
+        totalStock: 17,
+        reservedStock: 0,
+      },
+      {
+        productId: thermos.id,
+        warehouseId: southHub.id,
+        totalStock: 12,
+        reservedStock: 0,
+      },
+      {
+        productId: posture.id,
+        warehouseId: northHub.id,
+        totalStock: 15,
+        reservedStock: 0,
+      },
+      {
+        productId: posture.id,
+        warehouseId: southHub.id,
+        totalStock: 11,
         reservedStock: 0,
       },
     ],

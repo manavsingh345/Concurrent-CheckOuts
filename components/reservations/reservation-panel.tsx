@@ -1,5 +1,6 @@
 "use client";
 
+import Script from "next/script";
 import { useEffect, useState, useTransition } from "react";
 import useSWR from "swr";
 
@@ -15,9 +16,63 @@ type ReservationPanelProps = {
   initialReservation: ReservationView;
 };
 
+type RazorpayOrderPayload = {
+  order: {
+    keyId: string;
+    orderId: string;
+    amount: number;
+    currency: string;
+    reservationId: string;
+    productName: string;
+    description: string | null;
+    customer: {
+      name?: string;
+      email?: string;
+    };
+  };
+};
+
+type ApiErrorPayload = {
+  error?: {
+    message?: string;
+  };
+};
+
+declare global {
+  interface Window {
+    Razorpay?: new (options: Record<string, unknown>) => {
+      open: () => void;
+    };
+  }
+}
+
+async function readApiPayload(response: Response) {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+
+  const body = await response.text();
+
+  if (response.redirected || body.toLowerCase().includes("<html")) {
+    return {
+      error: {
+        message: "Your session needs attention. Please sign in again.",
+      },
+    };
+  }
+
+  return {
+    error: {
+      message: body || "The server returned an unexpected response.",
+    },
+  };
+}
+
 const fetcher = async (url: string) => {
   const response = await fetch(url, { cache: "no-store" });
-  const payload = await response.json();
+  const payload = await readApiPayload(response);
 
   if (!response.ok) {
     throw new Error(payload.error?.message ?? "Unable to load reservation.");
@@ -56,6 +111,7 @@ export function ReservationPanel({
   const [timeLeft, setTimeLeft] = useState(0);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [razorpayReady, setRazorpayReady] = useState(false);
 
   useEffect(() => {
     const updateCountdown = () => {
@@ -78,7 +134,7 @@ export function ReservationPanel({
         const response = await fetch(`/api/reservations/${reservationId}/${action}`, {
           method: "POST",
         });
-        const payload = await response.json();
+        const payload = await readApiPayload(response);
 
         if (!response.ok) {
           setActionError(payload.error?.message ?? `Unable to ${action} reservation.`);
@@ -87,8 +143,104 @@ export function ReservationPanel({
         }
 
         await mutate(payload, { revalidate: false });
-      } catch {
-        setActionError(`The ${action} request did not complete.`);
+      } catch (error) {
+        setActionError(
+          error instanceof Error
+            ? error.message
+            : `The ${action} request did not complete.`,
+        );
+      }
+    });
+  }
+
+  async function startPayment() {
+    setActionError(null);
+
+    startTransition(async () => {
+      try {
+        if (!window.Razorpay) {
+          throw new Error("Razorpay checkout is still loading. Please try again.");
+        }
+
+        const orderResponse = await fetch(
+          `/api/reservations/${reservationId}/payment-order`,
+          {
+            method: "POST",
+          },
+        );
+        const orderPayload = (await readApiPayload(orderResponse)) as
+          | RazorpayOrderPayload
+          | ApiErrorPayload;
+
+        if (!orderResponse.ok) {
+          const errorPayload = orderPayload as ApiErrorPayload;
+          setActionError(
+            errorPayload.error?.message ?? "Unable to start Razorpay checkout.",
+          );
+          await mutate();
+          return;
+        }
+
+        const orderData = orderPayload as RazorpayOrderPayload;
+
+        const checkout = new window.Razorpay({
+          key: orderData.order.keyId,
+          amount: orderData.order.amount,
+          currency: orderData.order.currency,
+          name: "Allo Health",
+          description:
+            orderData.order.description ??
+            `Payment for ${orderData.order.productName}`,
+          order_id: orderData.order.orderId,
+          prefill: {
+            name: orderData.order.customer.name,
+            email: orderData.order.customer.email,
+          },
+          theme: {
+            color: "#0f172a",
+          },
+          handler: async (response: {
+            razorpay_order_id: string;
+            razorpay_payment_id: string;
+            razorpay_signature: string;
+          }) => {
+            const verifyResponse = await fetch(
+              `/api/reservations/${reservationId}/payment-verify`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify(response),
+              },
+            );
+            const verifyPayload = await readApiPayload(verifyResponse);
+
+            if (!verifyResponse.ok) {
+              setActionError(
+                verifyPayload.error?.message ??
+                  "Payment verification failed for this reservation.",
+              );
+              await mutate();
+              return;
+            }
+
+            await mutate(verifyPayload, { revalidate: false });
+          },
+          modal: {
+            ondismiss: () => {
+              setActionError("Payment was not completed. Your reservation is still held.");
+            },
+          },
+        });
+
+        checkout.open();
+      } catch (error) {
+        setActionError(
+          error instanceof Error
+            ? error.message
+            : "Unable to start Razorpay checkout.",
+        );
       }
     });
   }
@@ -97,6 +249,11 @@ export function ReservationPanel({
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+      <Script
+        src="https://checkout.razorpay.com/v1/checkout.js"
+        strategy="afterInteractive"
+        onLoad={() => setRazorpayReady(true)}
+      />
       <Card className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -153,10 +310,10 @@ export function ReservationPanel({
 
         <div className="flex flex-wrap gap-3">
           <Button
-            onClick={() => submitAction("confirm")}
-            disabled={!isPendingStatus || isPending || timeLeft <= 0}
+            onClick={startPayment}
+            disabled={!isPendingStatus || isPending || timeLeft <= 0 || !razorpayReady}
           >
-            {isPending ? "Saving..." : "Confirm purchase"}
+            {isPending ? "Starting payment..." : "Pay with Razorpay"}
           </Button>
           <Button
             variant="secondary"
@@ -193,7 +350,7 @@ export function ReservationPanel({
 
         <Alert tone={reservation.status === "CONFIRMED" ? "success" : "neutral"}>
           {reservation.status === "PENDING"
-            ? "This hold is still consuming reserved stock and will be released automatically when it expires."
+            ? "This hold is still consuming reserved stock. Pay with Razorpay before the timer ends or cancel it to release the units."
             : reservation.status === "CONFIRMED"
               ? "The purchase is confirmed and total stock has been permanently reduced."
               : reservation.status === "CANCELLED"

@@ -148,11 +148,13 @@ export default async function ProductPage({ params }: ProductPageProps) {
             </div>
           </section>
 
-          <ProductPurchasePanel
-            product={product}
-            mrp={mrp}
-            deliveryText={`${merch.delivery}. Reserve stock for checkout from the warehouse that suits the customer best.`}
-          />
+          <section id="reserve">
+            <ProductPurchasePanel
+              product={product}
+              mrp={mrp}
+              deliveryText={`${merch.delivery}. Reserve stock for checkout from the warehouse that suits the customer best.`}
+            />
+          </section>
         </div>
       </main>
       <SiteFooter />

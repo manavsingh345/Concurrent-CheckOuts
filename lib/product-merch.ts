@@ -117,19 +117,31 @@ export function getProductMerch(
 ): ProductMerch {
   const normalized = product.name.toLowerCase();
 
-  if (normalized.includes("gummies") || normalized.includes("headphones")) {
+  if (
+    normalized.includes("gummies") ||
+    normalized.includes("hydration") ||
+    normalized.includes("probiotic")
+  ) {
     return merchProfiles[0];
   }
 
-  if (normalized.includes("monitor") || normalized.includes("keyboard")) {
+  if (
+    normalized.includes("monitor") ||
+    normalized.includes("massager") ||
+    normalized.includes("posture")
+  ) {
     return merchProfiles[1];
   }
 
-  if (normalized.includes("sleep") || normalized.includes("speaker")) {
+  if (
+    normalized.includes("sleep") ||
+    normalized.includes("mist") ||
+    normalized.includes("thermal")
+  ) {
     return merchProfiles[2];
   }
 
-  if (normalized.includes("diffuser")) {
+  if (normalized.includes("diffuser") || normalized.includes("aroma")) {
     return merchProfiles[3];
   }
 

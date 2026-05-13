@@ -11,6 +11,8 @@ export const env = {
   upstashUrl: process.env.UPSTASH_REDIS_REST_URL ?? "",
   upstashToken: process.env.UPSTASH_REDIS_REST_TOKEN ?? "",
   cronSecret: process.env.CRON_SECRET ?? "",
+  razorpayKeyId: process.env.RAZORPAY_KEY_ID ?? "",
+  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET ?? "",
   appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
   reservationTtlMinutes: toNumber(
     process.env.RESERVATION_TTL_MINUTES,
@@ -20,4 +22,8 @@ export const env = {
 
 export function isRedisConfigured() {
   return Boolean(env.upstashUrl && env.upstashToken);
+}
+
+export function isRazorpayConfigured() {
+  return Boolean(env.razorpayKeyId && env.razorpayKeySecret);
 }

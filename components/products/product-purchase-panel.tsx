@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { SignInButton, SignUpButton, useUser } from "@clerk/nextjs";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Alert } from "@/components/ui/alert";
@@ -20,10 +21,10 @@ export function ProductPurchasePanel({
   deliveryText,
 }: ProductPurchasePanelProps) {
   const router = useRouter();
+  const { isSignedIn } = useUser();
   const [selectedInventoryId, setSelectedInventoryId] = useState(
     product.inventories[0]?.inventoryId ?? "",
   );
-  const [quantity, setQuantity] = useState(1);
   const [quantityInput, setQuantityInput] = useState("1");
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -37,29 +38,16 @@ export function ProductPurchasePanel({
   );
 
   const maxQuantity = Math.max(1, selectedInventory?.availableStock ?? 1);
+  const requestedQuantity = getClampedQuantity(quantityInput, maxQuantity);
   const reserveDisabled =
     isPending ||
+    !isSignedIn ||
     !selectedInventory ||
     selectedInventory.availableStock === 0 ||
-    quantity > selectedInventory.availableStock;
-
-  useEffect(() => {
-    const nextQuantity = Math.min(quantity, maxQuantity);
-    setQuantity(nextQuantity);
-    setQuantityInput(String(nextQuantity));
-  }, [maxQuantity, quantity]);
+    requestedQuantity > selectedInventory.availableStock;
 
   function commitQuantity(value: string) {
-    const parsed = Number(value);
-
-    if (!Number.isFinite(parsed)) {
-      setQuantity(1);
-      setQuantityInput("1");
-      return 1;
-    }
-
-    const nextQuantity = Math.max(1, Math.min(maxQuantity, Math.trunc(parsed)));
-    setQuantity(nextQuantity);
+    const nextQuantity = getClampedQuantity(value, maxQuantity);
     setQuantityInput(String(nextQuantity));
     return nextQuantity;
   }
@@ -162,14 +150,44 @@ export function ProductPurchasePanel({
 
       {error ? <Alert tone="danger">{error}</Alert> : null}
 
+      {!isSignedIn ? (
+        <Alert tone="neutral">
+          Sign in with Google before reserving stock.
+        </Alert>
+      ) : null}
+
       <Button className="w-full rounded-full" onClick={reserve} disabled={reserveDisabled}>
         {isPending ? "Reserving..." : "Reserve product"}
       </Button>
+      {!isSignedIn ? (
+        <div className="flex gap-3">
+          <SignInButton mode="modal">
+            <button className="inline-flex h-11 flex-1 items-center justify-center rounded-full border border-[var(--border)] bg-white px-5 text-sm font-semibold text-[var(--ink)]">
+              Sign in
+            </button>
+          </SignInButton>
+          <SignUpButton mode="modal">
+            <button className="inline-flex h-11 flex-1 items-center justify-center rounded-full border border-[var(--border)] bg-white px-5 text-sm font-semibold text-[var(--ink)]">
+              Create account
+            </button>
+          </SignUpButton>
+        </div>
+      ) : null}
       <Button className="w-full rounded-full" variant="secondary" disabled>
         Buy now
       </Button>
     </aside>
   );
+}
+
+function getClampedQuantity(value: string, maxQuantity: number) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+
+  return Math.max(1, Math.min(maxQuantity, Math.trunc(parsed)));
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {

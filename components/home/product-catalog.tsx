@@ -74,46 +74,56 @@ export function ProductCatalog({
         className="grid gap-8 border-t border-[var(--border)] py-10 lg:grid-cols-[minmax(0,1fr)_320px]"
       >
         <div className="space-y-8">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-            <div>
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px] xl:items-start">
+            <div className="max-w-3xl">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted-ink)]">
                 Shop All
               </p>
-              <h2 className="mt-2 text-3xl font-semibold text-[var(--ink)]">
+              <h2 className="mt-3 max-w-2xl text-3xl font-semibold leading-[1.1] text-[var(--ink)] sm:text-4xl">
                 Browse cards first, then open a dedicated product page
               </h2>
+              <p className="mt-4 max-w-xl text-sm leading-7 text-[var(--muted-ink)] sm:text-[15px]">
+                Filter by care category, scan live stock at a glance, and jump
+                straight into the reservation flow from the catalog.
+              </p>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2 xl:justify-self-end">
               <StatChip label="Sellable now" value={`${liveUnits} units`} />
               <StatChip label="Trending" value={fastestProduct} />
             </div>
           </div>
 
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <label className="block w-full lg:max-w-md">
-              <span className="sr-only">Search products</span>
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search products, collections, or care categories"
-                className="h-12 w-full rounded-full border border-[var(--border)] bg-white px-5 text-sm outline-none transition focus:border-[var(--accent-strong)]"
-              />
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {productCategories.map((category) => (
-                <button
-                  key={category}
-                  className={cn(
-                    "h-10 rounded-full border px-4 text-sm font-medium",
-                    activeCategory === category
-                      ? "border-[var(--ink)] bg-[var(--ink)] text-white"
-                      : "border-[var(--border)] bg-white text-[var(--muted-ink)]",
-                  )}
-                  onClick={() => setActiveCategory(category)}
-                >
-                  {category}
-                </button>
-              ))}
+          <div className="rounded-[32px] border border-[var(--border)] bg-[linear-gradient(180deg,#ffffff_0%,#fbfcfe_100%)] p-4 shadow-[0_12px_30px_rgba(15,23,42,0.04)] sm:p-5">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_1.15fr] xl:items-center">
+              <label className="block">
+                <span className="sr-only">Search products</span>
+                <div className="flex h-14 items-center rounded-full border border-[var(--border)] bg-white px-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
+                  <span className="text-sm text-[var(--muted-ink)]">Search</span>
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="products, collections, or care categories"
+                    className="ml-3 h-full w-full bg-transparent text-sm outline-none placeholder:text-[var(--muted-ink)]"
+                  />
+                </div>
+              </label>
+
+              <div className="flex flex-wrap gap-2.5 xl:justify-end">
+                {productCategories.map((category) => (
+                  <button
+                    key={category}
+                    className={cn(
+                      "min-h-11 rounded-full border px-4 py-2 text-sm font-medium",
+                      activeCategory === category
+                        ? "border-[var(--ink)] bg-[var(--ink)] text-white shadow-[0_10px_24px_rgba(15,23,42,0.18)]"
+                        : "border-[var(--border)] bg-white text-[var(--muted-ink)] hover:border-slate-300 hover:text-[var(--ink)]",
+                    )}
+                    onClick={() => setActiveCategory(category)}
+                  >
+                    {category}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -170,19 +180,18 @@ function ProductCard({
   );
 
   return (
-    <Link
-      href={`/products/${product.id}`}
-      className="group overflow-hidden rounded-lg border border-[var(--border)] bg-white transition hover:border-slate-300 hover:shadow-[0_10px_30px_rgba(15,23,42,0.08)]"
-    >
+    <article className="group overflow-hidden rounded-lg border border-[var(--border)] bg-white transition hover:border-slate-300 hover:shadow-[0_10px_30px_rgba(15,23,42,0.08)]">
       <div className="relative aspect-[4/3] bg-[#f8fafc]">
-        <Image
-          src={merch.image}
-          alt={merch.title}
-          fill
-          priority={priority}
-          className="object-cover"
-          sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
-        />
+        <Link href={`/products/${product.id}`}>
+          <Image
+            src={merch.image}
+            alt={merch.title}
+            fill
+            priority={priority}
+            className="object-cover"
+            sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
+          />
+        </Link>
       </div>
 
       <div className="space-y-3 p-4">
@@ -193,9 +202,11 @@ function ProductCard({
           </span>
         </div>
 
-        <h3 className="line-clamp-3 text-[22px] leading-8 text-[var(--ink)] group-hover:text-[var(--accent-strong)]">
-          {product.name}
-        </h3>
+        <Link href={`/products/${product.id}`}>
+          <h3 className="line-clamp-3 text-[22px] leading-8 text-[var(--ink)] group-hover:text-[var(--accent-strong)]">
+            {product.name}
+          </h3>
+        </Link>
 
         <div className="text-sm text-[var(--muted-ink)]">
           <span className="font-medium text-[var(--ink)]">{merch.rating}</span>{" "}
@@ -219,18 +230,61 @@ function ProductCard({
         </div>
 
         <p className="text-sm text-[var(--muted-ink)]">{merch.delivery}</p>
+
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-alt)] p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--muted-ink)]">
+            Available by warehouse
+          </p>
+          <div className="mt-3 space-y-2">
+            {product.inventories.map((inventory) => (
+              <div
+                key={inventory.inventoryId}
+                className="flex items-center justify-between gap-3 text-sm"
+              >
+                <div>
+                  <p className="font-medium text-[var(--ink)]">
+                    {inventory.warehouseName}
+                  </p>
+                  <p className="text-[13px] text-[var(--muted-ink)]">
+                    {inventory.warehouseLocation}
+                  </p>
+                </div>
+                <span className="rounded-full border border-[var(--border)] bg-white px-3 py-1 text-[13px] font-semibold text-[var(--ink)]">
+                  {inventory.availableStock} units
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex gap-3 pt-1">
+          <Link
+            href={`/products/${product.id}#reserve`}
+            className="inline-flex h-11 flex-1 items-center justify-center rounded-full bg-[var(--ink)] px-5 text-sm font-semibold text-white"
+          >
+            Reserve
+          </Link>
+          <Link
+            href={`/products/${product.id}`}
+            className="inline-flex h-11 flex-1 items-center justify-center rounded-full border border-[var(--border)] bg-white px-5 text-sm font-semibold text-[var(--ink)]"
+          >
+            View details
+          </Link>
+        </div>
       </div>
-    </Link>
+    </article>
   );
 }
 
 function StatChip({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-full border border-[var(--border)] bg-white px-4 py-3">
+    <div className="min-w-[164px] rounded-[28px] border border-[var(--border)] bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] px-5 py-4">
       <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--muted-ink)]">
         {label}
       </p>
-      <p className="mt-1 text-sm font-semibold text-[var(--ink)]">{value}</p>
+      <p className="mt-2 text-[22px] font-semibold leading-7 text-[var(--ink)]">
+        {value}
+      </p>
     </div>
   );
 }

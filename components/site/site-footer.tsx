@@ -17,8 +17,8 @@ export function SiteFooter() {
             Explore
           </p>
           <div className="mt-4 flex flex-col gap-3 text-sm text-[var(--ink)]">
-            <a href="/#catalog">Shop products</a>
-            <a href="/#collections">Collections</a>
+            <Link href="/#catalog">Shop products</Link>
+            <Link href="/#collections">Collections</Link>
             <Link href="/api/products">Product API</Link>
           </div>
         </div>

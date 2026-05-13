@@ -1,7 +1,10 @@
 import Link from "next/link";
+import { auth } from "@clerk/nextjs/server";
+import { redirect } from "next/navigation";
 
 import { ReservationPanel } from "@/components/reservations/reservation-panel";
 import { Alert } from "@/components/ui/alert";
+import { requireAppUser } from "@/lib/auth";
 import { getReservationById } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
@@ -15,12 +18,19 @@ type ReservationPageProps = {
 export default async function ReservationPage({
   params,
 }: ReservationPageProps) {
+  const { userId } = await auth();
+
+  if (!userId) {
+    redirect("/sign-in");
+  }
+
+  const user = await requireAppUser();
   const { id } = await params;
   let reservation = null;
   let errorMessage: string | null = null;
 
   try {
-    reservation = await getReservationById(id);
+    reservation = await getReservationById(id, user.id);
   } catch (error) {
     errorMessage =
       error instanceof Error

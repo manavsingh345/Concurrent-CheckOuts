@@ -199,9 +199,12 @@ export async function listWarehouses(): Promise<WarehouseListItem[]> {
   }));
 }
 
-export async function getReservationById(id: string) {
-  const reservation = await prisma.reservation.findUnique({
-    where: { id },
+export async function getReservationById(id: string, userId?: string) {
+  const reservation = await prisma.reservation.findFirst({
+    where: {
+      id,
+      ...(userId ? { userId } : {}),
+    },
     include: reservationInclude,
   });
 

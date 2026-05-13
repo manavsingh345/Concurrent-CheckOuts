@@ -1,4 +1,4 @@
-import { Prisma, ReservationStatus } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 import type { ReservationView } from "@/lib/data";
 import { env } from "@/lib/env";
@@ -84,9 +84,12 @@ function normalizeIdempotencyKey(value: string | null) {
   return parsed.data;
 }
 
-async function getReservationOrThrow(id: string) {
-  const reservation = await prisma.reservation.findUnique({
-    where: { id },
+async function getReservationOrThrowForUser(id: string, userId?: string) {
+  const reservation = await prisma.reservation.findFirst({
+    where: {
+      id,
+      ...(userId ? { userId } : {}),
+    },
     include: reservationInclude,
   });
 
@@ -97,13 +100,14 @@ async function getReservationOrThrow(id: string) {
   return reservation;
 }
 
-async function expirePendingReservation(id: string) {
+async function expirePendingReservation(id: string, userId?: string) {
   const expiredRows = await prisma.$queryRaw<{ id: string }[]>`
     WITH expired AS (
       UPDATE "Reservation"
       SET status = 'EXPIRED',
           "updatedAt" = NOW()
       WHERE id = ${id}
+        ${userId ? Prisma.sql`AND "userId" = ${userId}` : Prisma.empty}
         AND status = 'PENDING'
         AND "expiresAt" <= NOW()
       RETURNING id, "inventoryId", quantity
@@ -125,11 +129,12 @@ async function expirePendingReservation(id: string) {
 export async function createReservation(
   input: CreateReservationInput,
   rawIdempotencyKey: string | null,
+  userId: string,
 ): Promise<MutationResponse> {
   const idempotencyKey = normalizeIdempotencyKey(rawIdempotencyKey);
   const reservationId = crypto.randomUUID();
   const cacheKey = idempotencyKey
-    ? buildIdempotencyCacheKey(idempotencyKey, input)
+    ? buildIdempotencyCacheKey(idempotencyKey, { ...input, userId })
     : null;
 
   if (cacheKey) {
@@ -158,6 +163,7 @@ export async function createReservation(
         SELECT id, TRUE AS replayed
         FROM "Reservation"
         WHERE "idempotencyKey" = ${idempotencyKey}
+          AND "userId" = ${userId}
       ),
       updated AS (
         UPDATE "Inventory"
@@ -169,8 +175,8 @@ export async function createReservation(
         RETURNING id
       ),
       inserted AS (
-        INSERT INTO "Reservation" (id, "inventoryId", quantity, status, "expiresAt", "idempotencyKey", "createdAt", "updatedAt")
-        SELECT ${reservationId}, ${input.inventoryId}, ${input.quantity}, 'PENDING', ${expiresAt}, ${idempotencyKey}, NOW(), NOW()
+        INSERT INTO "Reservation" (id, "inventoryId", "userId", quantity, status, "expiresAt", "idempotencyKey", "createdAt", "updatedAt")
+        SELECT ${reservationId}, ${input.inventoryId}, ${userId}, ${input.quantity}, 'PENDING', ${expiresAt}, ${idempotencyKey}, NOW(), NOW()
         FROM updated
         RETURNING id, FALSE AS replayed
       )
@@ -189,8 +195,8 @@ export async function createReservation(
         RETURNING id
       ),
       inserted AS (
-        INSERT INTO "Reservation" (id, "inventoryId", quantity, status, "expiresAt", "createdAt", "updatedAt")
-        SELECT ${reservationId}, ${input.inventoryId}, ${input.quantity}, 'PENDING', ${expiresAt}, NOW(), NOW()
+        INSERT INTO "Reservation" (id, "inventoryId", "userId", quantity, status, "expiresAt", "createdAt", "updatedAt")
+        SELECT ${reservationId}, ${input.inventoryId}, ${userId}, ${input.quantity}, 'PENDING', ${expiresAt}, NOW(), NOW()
         FROM updated
         RETURNING id, FALSE AS replayed
       )
@@ -240,13 +246,17 @@ export async function createReservation(
   return payload;
 }
 
-export async function confirmReservation(id: string): Promise<MutationResponse> {
+export async function confirmReservation(
+  id: string,
+  userId: string,
+): Promise<MutationResponse> {
   const confirmedRows = await prisma.$queryRaw<{ id: string }[]>`
     WITH confirmed AS (
       UPDATE "Reservation"
       SET status = 'CONFIRMED',
           "updatedAt" = NOW()
       WHERE id = ${id}
+        AND "userId" = ${userId}
         AND status = 'PENDING'
         AND "expiresAt" > NOW()
       RETURNING id, "inventoryId", quantity
@@ -264,13 +274,13 @@ export async function confirmReservation(id: string): Promise<MutationResponse> 
   `;
 
   if (confirmedRows.length === 0) {
-    const wasExpired = await expirePendingReservation(id);
+    const wasExpired = await expirePendingReservation(id, userId);
 
     if (wasExpired) {
       throw new AppError(410, "Reservation has expired.", "RESERVATION_EXPIRED");
     }
 
-    const existing = await getReservationOrThrow(id);
+    const existing = await getReservationOrThrowForUser(id, userId);
 
     throw new AppError(
       409,
@@ -279,7 +289,7 @@ export async function confirmReservation(id: string): Promise<MutationResponse> 
     );
   }
 
-  const reservation = await getReservationOrThrow(id);
+  const reservation = await getReservationOrThrowForUser(id, userId);
 
   return {
     reservation: mapReservation(reservation),
@@ -289,13 +299,17 @@ export async function confirmReservation(id: string): Promise<MutationResponse> 
   };
 }
 
-export async function releaseReservation(id: string): Promise<MutationResponse> {
+export async function releaseReservation(
+  id: string,
+  userId: string,
+): Promise<MutationResponse> {
   const cancelledRows = await prisma.$queryRaw<{ id: string }[]>`
     WITH cancelled AS (
       UPDATE "Reservation"
       SET status = 'CANCELLED',
           "updatedAt" = NOW()
       WHERE id = ${id}
+        AND "userId" = ${userId}
         AND status = 'PENDING'
         AND "expiresAt" > NOW()
       RETURNING id, "inventoryId", quantity
@@ -312,13 +326,13 @@ export async function releaseReservation(id: string): Promise<MutationResponse> 
   `;
 
   if (cancelledRows.length === 0) {
-    const wasExpired = await expirePendingReservation(id);
+    const wasExpired = await expirePendingReservation(id, userId);
 
     if (wasExpired) {
       throw new AppError(410, "Reservation has expired.", "RESERVATION_EXPIRED");
     }
 
-    const existing = await getReservationOrThrow(id);
+    const existing = await getReservationOrThrowForUser(id, userId);
 
     throw new AppError(
       409,
@@ -327,7 +341,7 @@ export async function releaseReservation(id: string): Promise<MutationResponse> 
     );
   }
 
-  const reservation = await getReservationOrThrow(id);
+  const reservation = await getReservationOrThrowForUser(id, userId);
 
   return {
     reservation: mapReservation(reservation),
