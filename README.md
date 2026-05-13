@@ -25,6 +25,7 @@ If the row updates → reservation wins. If no row updates → `409 Conflict`. T
 ---
 ## Architecture
 
+```mermaid
 flowchart LR
 
     User[Browser / Client] --> Frontend[Next.js App Router]
@@ -53,7 +54,7 @@ flowchart LR
 
     Atomic --> Success[201 Created]
     Atomic --> Conflict[409 Conflict]
-    
+```  
 ## Stack
 
 | Layer | Technology | Why |
