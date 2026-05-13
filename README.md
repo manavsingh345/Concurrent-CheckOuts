@@ -1,14 +1,16 @@
 # Inventory Reservation System
 
-A full-stack reservation system built to prevent checkout oversells under concurrency.
+> **One guarantee above all else:** inventory reservation remains correct even when multiple requests race for the same last unit.
 
-This project models products, warehouses, and per-warehouse inventory, then lets a user reserve stock for a short checkout window. The key requirement is correctness when multiple requests try to reserve the same last unit at the same time. The implementation solves that with an atomic PostgreSQL update inside a transaction, returning `409 Conflict` when stock is no longer available.
+A full-stack checkout-hold system built on Next.js, PostgreSQL, and Redis — engineered specifically around the concurrency problem that causes oversells.
 
-## What This Solves
+---
 
-In a naive checkout flow, two requests can both read "1 item left", both decide stock is available, and both decrement it. That race condition causes overselling.
+## The Problem This Solves
 
-This system avoids that by making reservation creation a single atomic database write:
+In a naive checkout flow, two simultaneous requests both read "1 item left", both decide stock is available, and both decrement it. That race condition causes overselling.
+
+This system eliminates that window entirely with a single atomic database write:
 
 ```sql
 UPDATE "Inventory"
@@ -18,226 +20,194 @@ WHERE id = $2
 RETURNING id;
 ```
 
-If the row updates, the reservation wins. If no row updates, stock was already taken and the API returns `409`.
+If the row updates → reservation wins. If no row updates → `409 Conflict`. There is no gap between reading and writing.
 
-## Solution Summary
+---
+## Architecture
 
-- `Next.js App Router` for the UI and API routes
-- `TypeScript` for end-to-end type safety
-- `PostgreSQL` as the source of truth for inventory
-- `Prisma` for schema, queries, and transactions
-- `Upstash Redis` for reservation creation idempotency
-- `Tailwind CSS` for the UI
-- `Zod` for request validation
-- `Vercel Cron` for expiring stale pending reservations
+flowchart LR
+
+    User[Browser / Client] --> Frontend[Next.js App Router]
+
+    Frontend --> Products[GET /api/products]
+    Frontend --> Reserve[POST /api/reservations]
+    Frontend --> Details[GET /api/reservations/:id]
+    Frontend --> Confirm[POST /api/reservations/:id/confirm]
+    Frontend --> Release[POST /api/reservations/:id/release]
+
+    Reserve --> Validate[Zod Validation]
+    Validate --> Redis[Upstash Redis<br/>Idempotency Cache]
+
+    Reserve --> Core[lib/reservations.ts<br/>Core Reservation Logic]
+
+    Core --> Atomic[Atomic PostgreSQL UPDATE]
+    Atomic --> DB[(PostgreSQL)]
+
+    DB --> Inventory[Inventory Table]
+    DB --> Reservation[Reservation Table]
+
+    Worker[Background Worker / Cron] --> Expiry[GET /api/cron/release-expired]
+    Expiry --> Core
+
+    Redis --> Replay[24hr Response Replay]
+
+    Atomic --> Success[201 Created]
+    Atomic --> Conflict[409 Conflict]
+    
+## Stack
+
+| Layer | Technology | Why |
+|---|---|---|
+| Framework | Next.js App Router | Unified frontend + API in one repo |
+| Database | PostgreSQL via Prisma | Atomic `UPDATE … RETURNING` is the correctness guarantee |
+| Cache | Upstash Redis | Idempotency replay only — Redis never touches stock truth |
+| Validation | Zod | Schema-level request validation before any DB work |
+| Styling | Tailwind CSS | — |
+
+---
 
 ## Core Reservation Logic
 
-The most important behavior in the entire project lives in [`lib/reservations.ts`](./lib/reservations.ts).
+Everything critical lives in [`lib/reservations.ts`](./lib/reservations.ts).
 
-Reservation creation works like this:
+**Reservation creation flow:**
 
-1. Validate the incoming request.
-2. Optionally check Redis for an `Idempotency-Key` replay.
-3. Start a database transaction.
-4. Execute one conditional `UPDATE` against the `Inventory` row.
-5. If no row is updated, return `409 Conflict`.
-6. If the row is updated, create a `PENDING` reservation in the same transaction.
+1. Validate the incoming request with Zod
+2. Check Redis for an `Idempotency-Key` replay (optional, client-driven)
+3. Open a database transaction
+4. Execute one conditional `UPDATE` against the `Inventory` row
+5. If **zero rows updated** → return `409 Conflict`, roll back
+6. If **one row updated** → create a `PENDING` reservation in the same transaction, commit
 
-This means there is no `SELECT -> compare in application code -> UPDATE` race window.
+### Why This Is Correct Under Concurrency
 
-### Why It Is Correct Under Concurrency
+When two requests race for the last unit:
 
-If two requests arrive simultaneously for the last unit:
+- Both hit the same `UPDATE … WHERE (totalStock - reservedStock) >= quantity`
+- PostgreSQL acquires a row lock and serializes the two writes
+- Exactly one request satisfies the condition and increments `reservedStock`
+- The other sees zero updated rows → `409 Conflict`
 
-- both attempt the same conditional `UPDATE`
-- PostgreSQL serializes the row update safely
-- exactly one request can make the condition true and increment `reservedStock`
-- the other request sees zero updated rows and gets `409 Conflict`
+No `SELECT → application compare → UPDATE` window. No optimistic locking. No distributed locks. The database row is the lock.
 
-That is the core correctness guarantee for this exercise.
+---
 
-## Reservation Lifecycle
+## Reservation Lifecycle Details
 
 ### `PENDING`
-
-Created after a successful reservation request. It holds stock by increasing `reservedStock`.
+Created on a successful reservation. Holds stock by incrementing `reservedStock` without touching `totalStock`.
 
 ### `CONFIRMED`
-
-When checkout succeeds:
-
-- `totalStock` is decremented
-- `reservedStock` is decremented
-- the reservation becomes `CONFIRMED`
+When checkout succeeds: `totalStock` decrements, `reservedStock` decrements, status becomes `CONFIRMED`. The hold converts to a permanent sale.
 
 ### `CANCELLED`
-
-When a user releases a reservation:
-
-- `reservedStock` is decremented
-- the reservation becomes `CANCELLED`
+User-initiated release: `reservedStock` decrements, status becomes `CANCELLED`. Stock returns to the available pool immediately.
 
 ### `EXPIRED`
+The background worker finds `PENDING` reservations where `expiresAt <= NOW()`, decrements their reserved quantities grouped by inventory row in one transaction, and marks them `EXPIRED`. Even if the user closes the browser, stock is cleaned up.
 
-When the hold window ends:
+---
 
-- a cron endpoint finds expired `PENDING` reservations
-- `reservedStock` is decremented
-- the reservation becomes `EXPIRED`
-
-## Architecture
-
-### Frontend
-
-- Product catalog page with warehouse selection and reserve flow
-- Reservation detail page with:
-  - countdown timer
-  - confirm action
-  - cancel action
-  - live status refresh
-
-### Backend
-
-- API routes under `app/api`
-- reservation business logic centralized in `lib/reservations.ts`
-- read models in `lib/data.ts`
-- validation in `lib/validators.ts`
-- shared helpers in `lib/http.ts`, `lib/env.ts`, `lib/idempotency.ts`, and `lib/prisma.ts`
-
-### Data model
-
-The inventory source of truth is:
-
-- `Inventory.totalStock`
-- `Inventory.reservedStock`
-
-Available stock is always computed as:
-
-```text
-totalStock - reservedStock
-```
-
-This keeps inventory accounting simple and makes the reservation check efficient.
-
-## Database Schema
-
-The schema is defined in [`prisma/schema.prisma`](./prisma/schema.prisma).
-
-### Main entities
-
-- `Product`
-- `Warehouse`
-- `Inventory`
-- `Reservation`
-
-### Important relationships
-
-- one product can exist in many warehouses
-- each `(productId, warehouseId)` pair has one `Inventory` row
-- each reservation belongs to exactly one inventory row
-
-## API Endpoints
-
-### `GET /api/products`
-
-Returns products plus per-warehouse inventory and available stock.
-
-### `GET /api/warehouses`
-
-Returns warehouse options.
+## API Reference
 
 ### `POST /api/reservations`
-
 Creates a pending reservation.
 
-Request body:
-
 ```json
-{
-  "inventoryId": "string",
-  "quantity": 1
-}
+{ "inventoryId": "string", "quantity": 1 }
 ```
 
-Possible responses:
+| Status | Meaning |
+|---|---|
+| `201 Created` | Reservation holds the stock |
+| `409 Conflict` | Not enough stock — another request won the race |
+| `400 Bad Request` | Invalid payload or invalid idempotency key |
 
-- `201 Created` when reservation succeeds
-- `409 Conflict` when not enough stock is available
-- `400 Bad Request` for invalid payload or invalid idempotency key
+Supports an optional `Idempotency-Key` header. Duplicate submissions within 24 hours return the cached original response.
+
+### `GET /api/products`
+Returns products with per-warehouse inventory and computed available stock.
 
 ### `GET /api/reservations/:id`
-
-Returns a reservation with its inventory, product, and warehouse data.
+Returns a reservation with its inventory, product, and warehouse.
 
 ### `POST /api/reservations/:id/confirm`
-
-Confirms a pending reservation and permanently consumes stock.
+Permanently consumes stock. Decrements `totalStock` and `reservedStock` in one transaction.
 
 ### `POST /api/reservations/:id/release`
-
-Cancels a pending reservation and returns held stock.
+Returns held stock. Decrements `reservedStock`, marks reservation `CANCELLED`.
 
 ### `GET /api/cron/release-expired`
+Sweeps expired `PENDING` reservations. Must be called with `Authorization: Bearer <CRON_SECRET>`. Intended for background workers only.
 
-Expires pending reservations whose `expiresAt` is in the past.
-
-## Idempotency
-
-The reservation creation endpoint supports an optional `Idempotency-Key` header.
-
-Flow:
-
-1. Hash the key and request body
-2. Check Redis for a cached response
-3. If found, return the cached result
-4. If not found, process the reservation normally
-5. Cache the successful response for 24 hours
-
-This protects clients from accidental duplicate reservation submissions due to retries or flaky networks.
+---
 
 ## Expiry Strategy
 
-The app exposes a protected cron endpoint at `GET /api/cron/release-expired`.
+Expiry is **server-authoritative** — it does not rely on the client countdown timer.
 
-In production, this endpoint should be triggered by an external scheduler such as `cron-job.org` every minute. This keeps reservation expiry server-authoritative without requiring a Vercel Pro cron plan.
+A background scheduler calls `GET /api/cron/release-expired` on a fixed interval (e.g. every minute) with the `CRON_SECRET` header. The handler:
 
-The cron endpoint supports `CRON_SECRET` authorization in production.
+1. Verifies the bearer token
+2. Finds all `PENDING` reservations where `expiresAt <= NOW()`
+3. Groups their quantities by inventory row
+4. Decrements `reservedStock` and marks each `EXPIRED` — all in one transaction
 
-## How Expiry Works In Production
+**Scheduling options:** any HTTP-capable scheduler works — cron-job.org, Vercel Cron, Railway, Render, Fly.io, or a simple `curl` loop on a server.
 
-In production, reservation expiry is handled by a scheduled external cron request rather than by browser timers or client-side cleanup.
+> Note: schedulers commonly run in UTC. Align your `expiresAt` timezone expectations with whichever platform you use.
 
-Flow:
+---
 
-1. An external scheduler triggers `GET /api/cron/release-expired` on the configured schedule.
-2. The scheduler sends `Authorization: Bearer <CRON_SECRET>` with the request.
-3. The route verifies the header before doing any work.
-4. The backend finds `PENDING` reservations where `expiresAt <= NOW()`.
-5. Those reservations are updated to `EXPIRED`.
-6. Their reserved quantities are grouped by inventory row and deducted from `reservedStock` inside the same database transaction.
+## Data Model
 
-This design keeps expiry server-authoritative. Even if a user leaves a tab open or closes the browser, expired holds are still cleaned up and stock becomes available again.
+```
+Product ──< Inventory >── Warehouse
+                │
+                └──< Reservation
+```
 
-Two important production notes:
+The inventory source of truth is two fields per `(productId, warehouseId)` pair:
 
-- external schedulers commonly use UTC scheduling, so verify the timezone in the scheduler dashboard
-- if you deploy on Vercel Hobby, using an external scheduler avoids the once-per-day Vercel cron limitation
+```
+availableStock = totalStock - reservedStock
+```
 
-## How To Run Locally
+`totalStock` — actual units on hand. Only decrements on confirmed purchase.
+`reservedStock` — temporary holds. Increments on `PENDING`, decrements on every terminal transition.
 
-This project expects real environment variables, a PostgreSQL database, and seeded sample data before the UI becomes useful.
+See the full schema: [`prisma/schema.prisma`](./prisma/schema.prisma)
+
+---
+
+## Idempotency
+
+Reservation creation supports an optional `Idempotency-Key` header to protect against duplicate submissions from retries or flaky networks.
+
+**Flow:**
+1. Hash `(idempotency-key + request body)`
+2. Check Redis for a cached response
+3. Cache hit → return the original response immediately
+4. Cache miss → process normally, cache the successful result for 24 hours
+
+Idempotency is applied only to reservation creation, where accidental duplication risk is highest. Confirm and release are simple non-idempotent mutations.
+
+---
+
+## Local Setup
+
+### Prerequisites
+- Node.js
+- A PostgreSQL instance (Supabase, Neon, or local)
+- An Upstash Redis database
 
 ### 1. Install dependencies
-
-```powershell
+```sh
 npm install
 ```
 
-### 2. Configure environment variables
-
-Copy `.env.example` into `.env` and set real values for:
-
+### 2. Configure environment
+Copy `.env.example` to `.env` and fill in:
 ```env
 DATABASE_URL=""
 UPSTASH_REDIS_REST_URL=""
@@ -247,110 +217,67 @@ NEXT_PUBLIC_APP_URL="http://localhost:3000"
 RESERVATION_TTL_MINUTES="10"
 ```
 
-Notes:
-
-- `DATABASE_URL` should point to your Postgres instance from Supabase, Neon, or another provider.
-- `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` come from your Upstash Redis database.
-- `CRON_SECRET` can be any long random string and is mainly needed for protected cron execution in production.
-
-### 3. Generate Prisma client
-
-```powershell
-npm run db:generate
+### 3. Set up the database
+```sh
+npm run db:generate   # generate Prisma client
+npm run db:push       # apply schema to database
+npm run db:seed       # load sample products + inventory
 ```
 
-### 4. Apply the schema to the database
-
-This project uses Prisma schema sync for local setup:
-
-```powershell
-npm run db:push
-```
-
-If you prefer formal SQL migrations later, that would be a good next hardening step, but for this exercise `db:push` keeps setup fast.
-
-### 5. Seed sample data
-
-```powershell
-npm run db:seed
-```
-
-### 6. Start the app
-
-```powershell
+### 4. Start the app
+```sh
 npm run dev
+# → http://localhost:3000
 ```
 
-Open:
+---
 
-```text
-http://localhost:3000
-```
-
-### Fresh local setup in one sequence
-
-```powershell
-npm install
-npm run db:generate
-npm run db:push
-npm run db:seed
-npm run dev
-```
-
-## Test And Verification
-
-### Lint
-
-```powershell
-npm run lint
-```
-
-### Production build
-
-```powershell
-npm run build
-```
+## Testing
 
 ### Concurrency test
+The most important test. Fires 50 concurrent reservation requests for an inventory row with 5 available units:
 
-Use the included script:
-
-```powershell
+```sh
 npm run test:concurrency -- http://localhost:3000 <inventoryId> 1 50
 ```
 
-Expected result for inventory with `5` available units:
+Expected result: **5 successes, 45 `409 Conflict` responses.** Any other outcome is a bug.
 
-- `5` successful reservations
-- `45` `409 Conflict` responses
+### Lint + build
+```sh
+npm run lint
+npm run build
+```
 
-### Manual flow
+### Manual expiry test
+Trigger the release endpoint directly with the same header the worker uses:
+```sh
+curl -H "Authorization: Bearer <CRON_SECRET>" http://localhost:3000/api/cron/release-expired
+```
 
-1. Open the product catalog
-2. Reserve stock from a warehouse
-3. Confirm the purchase or cancel it
-4. Verify the reservation page updates correctly
-5. Trigger the cron endpoint manually to test expiry behavior
+---
 
 ## Project Structure
 
-```text
+```
 app/
   api/
-  reservations/
+    products/
+    reservations/
+    cron/release-expired/
+  reservations/          # reservation detail page
 components/
   home/
   reservations/
   ui/
 lib/
+  reservations.ts        ← start here
   data.ts
-  env.ts
-  http.ts
-  idempotency.ts
-  prisma.ts
-  reservations.ts
-  utils.ts
   validators.ts
+  idempotency.ts
+  http.ts
+  env.ts
+  prisma.ts
 prisma/
   schema.prisma
   seed.mjs
@@ -358,64 +285,39 @@ scripts/
   concurrency-test.mjs
 ```
 
-## Design Decisions And Trade-Offs
+**Start reading here:**
+- [`lib/reservations.ts`](./lib/reservations.ts) — the concurrency-safe reservation flow
+- [`prisma/schema.prisma`](./prisma/schema.prisma) — data model
+- [`app/api/reservations/route.ts`](./app/api/reservations/route.ts) — main reservation endpoint
+- [`app/api/cron/release-expired/route.ts`](./app/api/cron/release-expired/route.ts) — expiry sweep
+
+---
+
+## Design Decisions
 
 ### Why PostgreSQL atomic updates instead of Redis locks?
-
-Because inventory truth already lives in PostgreSQL. For a single-database stock system, conditional row updates are simpler, safer, and avoid introducing a second consistency boundary for the critical reservation path.
-
-Redis is used only where it adds clear value here: idempotency and response replay.
+Inventory truth lives in PostgreSQL. For a single-database stock system, a conditional row `UPDATE` is simpler, safer, and avoids a second consistency boundary. Redis is used only for idempotency — where it adds clear value without touching correctness.
 
 ### Why keep `reservedStock` separate from `totalStock`?
-
-Because a checkout hold is not a sale yet.
-
-- `reservedStock` tracks temporary holds
-- `totalStock` tracks actual inventory on hand
-- confirmation converts a hold into a sale by decrementing both
+A hold is not a sale. `reservedStock` tracks temporary holds; `totalStock` tracks actual units on hand. Confirmation converts a hold into a sale by decrementing both. This keeps accounting clean and makes the reservation check a single-row read.
 
 ### Why centralize reservation rules in one module?
+Correctness is easier to maintain when all state transitions live in one place (`lib/reservations.ts`) rather than scattered across API handlers.
 
-Because correctness is easier to maintain when all state transitions live in one place instead of being scattered across API handlers.
+---
 
-## Trade-Offs And What I Would Improve With More Time
+## Known Limitations & What I'd Improve Next
 
-### Trade-offs made for this exercise
+**Trade-offs made for this exercise:**
+- `prisma db push` instead of versioned migrations (fast for setup; production needs migration history)
+- Polling-style expiry sweep every N minutes instead of per-reservation delayed jobs (simple and reliable at this scope; not optimal at high volume)
+- Reservations are tied to a single inventory row — no split fulfillment across warehouses
+- No authentication, user ownership, or payment model (kept scope focused on the concurrency requirement)
 
-- I used `prisma db push` for fast local setup instead of a formal migration history. That is convenient for an exercise, but production systems usually want versioned migrations.
-- I used a cron-based expiry sweep every minute rather than a queue or worker system. It is simple and reliable for this scope, but it is not the most precise or scalable option for very high reservation volume.
-- I kept reservations tied to a single inventory row. That keeps the concurrency story clean, but it does not support split fulfillment across multiple warehouses.
-- I applied Redis idempotency only to reservation creation, where duplicate submission risk is highest. Confirm and release remain simpler non-idempotent mutations in v1.
-- I did not add authentication, user ownership, or a real order/payment model so the solution could stay focused on the concurrency requirement.
-
-### With more time, I would
-
-- add formal Prisma migrations and deployment-safe migration documentation
-- add automated integration tests that spin up Postgres and verify concurrent reservation behavior repeatedly
-- add a background worker or queue option for more precise expiration handling at scale
-- introduce an order model so `CONFIRMED` reservations become traceable purchases rather than just stock movements
-- add observability around reservation conflicts, expiry counts, and cron execution outcomes
-- make idempotency behavior more robust for all mutation endpoints, not only reservation creation
-
-## Known Limitations
-
-- no authentication or user-specific ownership of reservations
-- no order or payment model beyond reservation confirmation
-- one reservation maps to one inventory row only
-- the current seed script wipes existing sample data before reseeding
-- real end-to-end behavior still depends on valid Postgres and Upstash credentials
-
-## Files Worth Reviewing First
-
-- [`lib/reservations.ts`](./lib/reservations.ts) for the concurrency-safe reservation flow
-- [`prisma/schema.prisma`](./prisma/schema.prisma) for the data model
-- [`app/api/reservations/route.ts`](./app/api/reservations/route.ts) for the main reservation endpoint
-- [`app/api/cron/release-expired/route.ts`](./app/api/cron/release-expired/route.ts) for expiry handling
-
-## Final Notes
-
-This project is intentionally centered around one key backend guarantee:
-
-> inventory reservation must remain correct even when multiple requests hit the same stock concurrently.
-
-Everything else in the system, from the UI to cron expiry to idempotency, supports that guarantee rather than replacing it.
+**With more time:**
+- Formal Prisma migrations with deployment-safe rollout docs
+- Integration tests that spin up Postgres and verify concurrent behavior under load repeatedly
+- Per-reservation delayed jobs in a queue for precise expiration at scale
+- Order model so `CONFIRMED` reservations become traceable purchases
+- Observability: conflict rates, expiry counts, worker health, sweep latency
+- Idempotency on confirm and release endpoints
