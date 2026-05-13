@@ -1,7 +1,7 @@
-import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { ProductImageGallery } from "@/components/products/product-image-gallery";
 import { ProductPurchasePanel } from "@/components/products/product-purchase-panel";
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
@@ -27,6 +27,7 @@ export default async function ProductPage({ params }: ProductPageProps) {
   }
 
   const merch = getProductMerch(product);
+  const productImages = merch.images.length > 0 ? merch.images : [merch.image];
   const mrp = Math.round(product.price * merch.mrpMultiplier);
   const discount = Math.max(
     1,
@@ -54,35 +55,7 @@ export default async function ProductPage({ params }: ProductPageProps) {
         </div>
 
         <div className="grid gap-8 xl:grid-cols-[120px_minmax(0,1.2fr)_minmax(0,0.9fr)_340px]">
-          <div className="hidden gap-3 xl:grid">
-            {[0, 1, 2, 3].map((item) => (
-              <div
-                key={item}
-                className="overflow-hidden rounded-lg border border-[var(--border)] bg-[#f8fafc]"
-              >
-                <Image
-                  src={merch.image}
-                  alt={product.name}
-                  width={92}
-                  height={92}
-                  className="h-[92px] w-[92px] object-cover"
-                />
-              </div>
-            ))}
-          </div>
-
-          <section className="rounded-lg border border-[var(--border)] bg-white p-6">
-            <div className="relative aspect-square overflow-hidden rounded-lg bg-[#f8fafc]">
-              <Image
-                src={merch.image}
-                alt={product.name}
-                fill
-                priority
-                className="object-contain"
-                sizes="(max-width: 1280px) 100vw, 45vw"
-              />
-            </div>
-          </section>
+          <ProductImageGallery images={productImages} productName={product.name} />
 
           <section className="space-y-5">
             <div>
