@@ -198,35 +198,20 @@ This protects clients from accidental duplicate reservation submissions due to r
 
 ## Expiry Strategy
 
-The app includes a Vercel cron configuration in [`vercel.json`](./vercel.json):
+The app exposes a protected cron endpoint at `GET /api/cron/release-expired`.
 
-```json
-{
-  "crons": [
-    {
-      "path": "/api/cron/release-expired",
-      "schedule": "* * * * *"
-    }
-  ]
-}
-```
+In production, this endpoint should be triggered by an external scheduler such as `cron-job.org` every minute. This keeps reservation expiry server-authoritative without requiring a Vercel Pro cron plan.
 
-Important:
-
-- the schedule is every minute
-- this requires a Vercel plan that supports per-minute cron execution
-- on Vercel Hobby, cron jobs are limited to once per day
-
-The cron endpoint also supports `CRON_SECRET` authorization in production.
+The cron endpoint supports `CRON_SECRET` authorization in production.
 
 ## How Expiry Works In Production
 
-In production, reservation expiry is handled by a scheduled Vercel cron job rather than by browser timers or client-side cleanup.
+In production, reservation expiry is handled by a scheduled external cron request rather than by browser timers or client-side cleanup.
 
 Flow:
 
-1. Vercel triggers `GET /api/cron/release-expired` on the configured schedule.
-2. Vercel automatically sends `Authorization: Bearer <CRON_SECRET>` when `CRON_SECRET` is configured in the project settings.
+1. An external scheduler triggers `GET /api/cron/release-expired` on the configured schedule.
+2. The scheduler sends `Authorization: Bearer <CRON_SECRET>` with the request.
 3. The route verifies the header before doing any work.
 4. The backend finds `PENDING` reservations where `expiresAt <= NOW()`.
 5. Those reservations are updated to `EXPIRED`.
@@ -236,8 +221,8 @@ This design keeps expiry server-authoritative. Even if a user leaves a tab open 
 
 Two important production notes:
 
-- Vercel cron uses UTC scheduling.
-- The current `* * * * *` schedule is valid for Pro or higher; Hobby plans only support once-per-day cron jobs.
+- external schedulers commonly use UTC scheduling, so verify the timezone in the scheduler dashboard
+- if you deploy on Vercel Hobby, using an external scheduler avoids the once-per-day Vercel cron limitation
 
 ## How To Run Locally
 
@@ -371,7 +356,6 @@ prisma/
   seed.mjs
 scripts/
   concurrency-test.mjs
-vercel.json
 ```
 
 ## Design Decisions And Trade-Offs
